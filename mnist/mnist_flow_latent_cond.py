@@ -104,7 +104,7 @@ for epoch in tqdm.tqdm(range(num_epochs)):
     val_loss /= len(val_loader)
     val_loss_history.append(val_loss)
     
-    print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}')
+    print(f'Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}', flush=True)
 
 # Save the trained model
 torch.save(flow.state_dict(), 'flow_model.pth')
