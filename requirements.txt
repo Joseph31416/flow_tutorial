@@ -20,8 +20,8 @@ scipy==1.16.0
 six==1.17.0
 sympy==1.14.0
 threadpoolctl==3.6.0
-torch==2.7.1
-torchaudio==2.7.1
-torchvision==0.22.1
+torch
+torchaudio
+torchvision
 tqdm==4.67.1
 typing_extensions==4.14.1
