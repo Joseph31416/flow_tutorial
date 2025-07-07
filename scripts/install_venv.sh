@@ -30,4 +30,4 @@ source ".venv/bin/activate"
 
 rm -r __pycache__
 pip install -r requirements.txt
-pip install -e .
+# pip install -e .
