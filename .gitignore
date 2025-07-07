@@ -1,4 +1,5 @@
 # Byte-compiled / optimized / DLL files
+*.png
 /data
 /logs
 __pycache__/

@@ -56,7 +56,7 @@ print(f'Number of parameters: {sum(p.numel() for p in flow.parameters() if p.req
 optimizer = torch.optim.AdamW(flow.parameters(), 1e-3)
 loss_fn = nn.MSELoss()
 num_epochs = 500
-batch_size = 1024
+batch_size = 4096
 
 # Initialize loss history lists
 train_loss_history = []
@@ -119,7 +119,8 @@ plt.ylabel('Loss')
 plt.title('Training and Validation Loss')
 plt.legend()
 plt.grid(True)
-plt.show()
+plt.savefig('training_loss_history.png', dpi=300, bbox_inches='tight')
+plt.close()
 
 # sampling - generate multiple images
 flow.eval()
@@ -153,4 +154,5 @@ for sample_idx in range(n_samples):
         axes[sample_idx, i + 1].axis('off')
 
 plt.tight_layout()
-plt.show()
+plt.savefig('flow_samples.png', dpi=300, bbox_inches='tight')
+plt.close()
