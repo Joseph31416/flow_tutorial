@@ -2,22 +2,29 @@ import torch
 from torch import nn, Tensor
 import matplotlib.pyplot as plt
 from load_utils import load_data
-from mnist_autoencoder_cnn import CNNAutoencoder
+from mnist_autoencoder_cnn_gauss import CNNAutoencoder
 import tqdm
 import os
 
+def swish(x: Tensor) -> Tensor:
+    return x * torch.sigmoid(x)
+
+class Swish(nn.Module):
+    def forward(self, x: Tensor) -> Tensor:
+        return swish(x)
+
 class Flow(nn.Module):
-    def __init__(self, dim: int = 784, h: int = 512):
+    def __init__(self, dim: int = 784, h: int = 4096):
         super().__init__()
         self.net = nn.Sequential(
         nn.Linear(dim + 1 + 10, h),
-        nn.ELU(),
+        nn.ReLU(),
         nn.Linear(h, h),
-        nn.ELU(),
+        nn.ReLU(),
         nn.Linear(h, h),
-        nn.ELU(),
+        nn.ReLU(),
         nn.Linear(h, dim),
-        nn.Sigmoid()  # Sigmoid to keep output in [0, 1] range
+        # nn.Sigmoid()  # Sigmoid to keep output in [0, 1] range
     )
     def forward(self, x_t: Tensor, c: Tensor, t: Tensor) -> Tensor:
         return self.net(torch.cat((t, c, x_t), -1))
@@ -39,7 +46,7 @@ def get_device():
 device = get_device()
 print(f"Using device: {device}")
 # training
-latent_dim = 16  # Set the latent dimension for the autoencoder
+latent_dim = 32  # Set the latent dimension for the autoencoder
 flow = Flow(dim=latent_dim).to(device)
 autoencoder = CNNAutoencoder(latent_dim=latent_dim).to(device)
 # load weights
@@ -55,8 +62,8 @@ print(f'Number of parameters: {sum(p.numel() for p in flow.parameters() if p.req
 # use AdamW optimizer with learning rate 1e-3
 optimizer = torch.optim.AdamW(flow.parameters(), 1e-3)
 loss_fn = nn.MSELoss()
-num_epochs = 500
-batch_size = 4096
+num_epochs = 10
+batch_size = 256
 
 # Initialize loss history lists
 train_loss_history = []
@@ -71,7 +78,9 @@ for epoch in tqdm.tqdm(range(num_epochs)):
         labels_one_hot = torch.nn.functional.one_hot(
             labels, num_classes=10
         ).float().to(device)
-        x_1 = autoencoder.encoder(data.to(device))
+        data = data.to(device)
+        mu, logvar = autoencoder.encode(data)
+        x_1 = autoencoder.reparameterize(mu, logvar)
         # concat the one-hot encoded labels to the encoded data
         x_0 = torch.randn_like(x_1).to(device)
         t = torch.rand(len(x_1), 1).to(device)
@@ -94,7 +103,9 @@ for epoch in tqdm.tqdm(range(num_epochs)):
             labels_one_hot = torch.nn.functional.one_hot(
                 labels, num_classes=10
             ).float().to(device)
-            x_1 = autoencoder.encoder(data.to(device))
+            data = data.to(device)
+            mu, logvar = autoencoder.encode(data)
+            x_1 = autoencoder.reparameterize(mu, logvar)
             # concat the one-hot encoded labels to the encoded data
             x_0 = torch.randn_like(x_1).to(device)
             t = torch.rand(len(x_1), 1).to(device)

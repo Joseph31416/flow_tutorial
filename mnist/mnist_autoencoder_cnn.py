@@ -24,7 +24,7 @@ print(f"Using device: {device}")
 batch_size = 128
 learning_rate = 1e-4
 num_epochs = 30
-latent_dim = 16
+latent_dim = 4
 
 class CNNAutoencoder(nn.Module):
     def __init__(self, latent_dim=16):
