@@ -36,8 +36,8 @@ device = get_device()
 print(f"Using device: {device}")
 
 # Hyperparameters
-batch_size = 256
-learning_rate = 1e-3
+batch_size = 64
+learning_rate = 3e-4
 num_epochs = 20
 latent_dim = 32
 beta = 0.01  # Weight for KL divergence loss (can be tuned)
@@ -50,29 +50,31 @@ class CNNAutoencoder(nn.Module):
         # Encoder - outputs mean and log variance for Gaussian latent space
         self.encoder_features = nn.Sequential(
             # Input: 1 x 28 x 28
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 32 x 14 x 14
+            nn.Conv2d(1, 128, kernel_size=3, stride=2, padding=1),  # 32 x 14 x 14
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), # 64 x 7 x 7
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # 64 x 7 x 7
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 128 x 4 x 4
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), # 128 x 4 x 4
             nn.ReLU(),
             nn.Flatten(),  # 128 * 4 * 4 = 2048
+            nn.LayerNorm(512 * 4 * 4)  # Normalize features before FC layers
         )
         
         # Separate layers for mean and log variance
-        self.fc_mu = nn.Linear(128 * 4 * 4, latent_dim)  # Mean
-        self.fc_logvar = nn.Linear(128 * 4 * 4, latent_dim)  # Log variance
+        self.fc_mu = nn.Linear(512 * 4 * 4, latent_dim)  # Mean
+        self.fc_logvar = nn.Linear(512 * 4 * 4, latent_dim)  # Log variance
         
         # Decoder
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 128 * 4 * 4),
+            nn.Linear(latent_dim, 512 * 4 * 4),
+            nn.LayerNorm(512 * 4 * 4),
             nn.ReLU(),
-            nn.Unflatten(1, (128, 4, 4)),  # Reshape to 128 x 4 x 4
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1), # 64 x 8 x 8
+            nn.Unflatten(1, (512, 4, 4)),  # Reshape to 128 x 4 x 4
+            nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1), # 64 x 8 x 8
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),  # 32 x 16 x 16
+            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),  # 32 x 16 x 16
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1),   # 1 x 32 x 32
+            nn.ConvTranspose2d(128, 1, kernel_size=3, stride=2, padding=1, output_padding=1),   # 1 x 32 x 32
             nn.Sigmoid()
         )
         

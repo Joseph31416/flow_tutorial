@@ -1,3 +1,18 @@
+"""
+CNN Variational Autoencoder with Gaussian Regularization for MNIST
+
+This script implements a Convolutional Variational Autoencoder (CNN VAE) that regularizes
+the latent space to follow an isotropic Gaussian distribution. Key features:
+
+1. Encoder outputs mean (μ) and log-variance (log σ²) for each latent dimension
+2. Reparameterization trick for differentiable sampling: z = μ + σ * ε, where ε ~ N(0,I)
+3. KL divergence loss regularizes latent space: KL(q(z|x) || p(z)) where p(z) = N(0,I)
+4. Total loss: Reconstruction Loss + β * KL Divergence Loss
+5. Enables generation of new samples by sampling from N(0,I) in latent space
+
+The β parameter controls the trade-off between reconstruction quality and latent space regularity.
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,6 +22,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+from cnn_vae_deep import CNNAutoencoder
 
 # Set device with preference: cuda -> mps -> cpu
 def get_device():
@@ -23,110 +39,10 @@ print(f"Using device: {device}")
 # Hyperparameters
 batch_size = 256
 learning_rate = 1e-3
-num_epochs = 30
-latent_dim = 2
-beta = 0.01  # Weight for KL divergence loss (can be tuned)
+num_epochs = 20
+latent_dim = 32
+beta = 1e-2  # Weight for KL divergence loss (can be tuned)
 binarization_threshold = 0.5  # Threshold for converting grayscale to binary images
-
-class CustomSigmoid(nn.Module):
-    def __init__(self, lower_bound=0, upper_bound=1, scale=1):
-        super(CustomSigmoid, self).__init__()
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        self.scale = scale
-    
-    def forward(self, x):
-        return self.lower_bound + (self.upper_bound - self.lower_bound) * torch.sigmoid(x / self.scale)
-
-class VAE(nn.Module):
-    def __init__(self, latent_dim=16):
-        super(VAE, self).__init__()
-        
-        # Encoder - outputs mean and log variance for Gaussian latent space
-        self.encoder_features = nn.Sequential(
-            # Input: 1 x 28 x 28
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 32 x 14 x 14
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), # 64 x 7 x 7
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 128 x 4 x 4
-            nn.ReLU(),
-            nn.Flatten(),  # 128 * 4 * 4 = 2048
-        )
-        
-        # Separate layers for mean and log variance
-        self.fc_mu = nn.Sequential(
-            nn.Linear(128 * 4 * 4, latent_dim),
-            # clip the output to ensure it is in a reasonable range
-            # nn.Tanh()  # Use Tanh to constrain mean to [-1, 1] range
-        )
-        self.fc_logvar = nn.Sequential(
-            nn.Linear(128 * 4 * 4, latent_dim),
-            # clip the output to ensure it is in a reasonable range
-            # nn.Tanh()  # Use Tanh to constrain log variance to [-1,
-        )
-        # Decoder
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 128 * 4 * 4),
-            nn.ReLU(),
-            nn.Unflatten(1, (128, 4, 4)),  # Reshape to 128 x 4 x 4
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1), # 64 x 8 x 8
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),  # 32 x 16 x 16
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1),   # 1 x 32 x 32
-            nn.Sigmoid()
-        )
-        
-        # Add a final layer to crop from 32x32 to 28x28
-        self.final_crop = nn.Sequential(
-            nn.Conv2d(1, 1, kernel_size=5, stride=1, padding=0),  # 1 x 28 x 28
-            nn.Sigmoid()
-        )
-
-        # randomly initialize weights using best practices
-        self._initialize_weights()
-    def _initialize_weights(self):
-        """Initialize weights using Kaiming uniform initialization."""
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_uniform_(m.weight, a=0.01, nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.kaiming_uniform_(m.weight, a=0.01, nonlinearity='linear')
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-    
-    def encode(self, x):
-        """Encode input to latent parameters (mean and log variance)."""
-        features = self.encoder_features(x)
-        mu = self.fc_mu(features)
-        logvar = self.fc_logvar(features)
-        return mu, logvar
-    
-    def reparameterize(self, mu, logvar):
-        """Reparameterization trick for sampling from N(mu, var)."""
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std, eps
-    
-    def forward(self, x):
-        # Encode to get mean and log variance
-        mu, logvar = self.encode(x)
-        # Sample from the latent distribution
-        z, eps = self.reparameterize(mu, logvar)
-        # Decode
-        decoded = self.decoder(z)
-        # Final crop to match original size
-        decoded = self.final_crop(decoded)
-        return decoded, mu, logvar, eps
-    
-    def decode(self, z):
-        """Decode from latent space."""
-        decoded = self.decoder(z)
-        decoded = self.final_crop(decoded)
-        return decoded
 
 def load_data():
     """Load and split MNIST dataset into train and validation sets."""
@@ -163,12 +79,13 @@ def load_data():
     
     return train_loader, val_loader, test_loader
 
-def mle_loss(mu, logvar, eps):
-    l_qz = - 0.5 * (torch.sum(torch.pow(eps, 2)) - torch.sum(logvar))
-    std = torch.exp(0.5 * logvar)
-    z = mu + std * eps
-    l_pz = - 0.5 * torch.sum(torch.pow(z, 2))
-    return l_qz, l_pz
+def kl_divergence_loss(mu, logvar):
+    """
+    Compute KL divergence loss between latent distribution and standard normal.
+    KL(N(mu, sigma^2) || N(0, 1)) = 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+    """
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+    return kl_loss.mean()
 
 def train_autoencoder(model, train_loader, val_loader, num_epochs):
     """Train the variational autoencoder with Gaussian regularization."""
@@ -197,14 +114,12 @@ def train_autoencoder(model, train_loader, val_loader, num_epochs):
             
             # Forward pass
             optimizer.zero_grad()
-            reconstructed, mu, logvar, eps = model(data)
+            reconstructed, mu, logvar = model(data)
             
             # Compute losses
             recon_loss = reconstruction_criterion(reconstructed, data)
-            l_qz, l_pz = mle_loss(mu, logvar, eps)
-            l_qz /= data.shape[0]
-            l_pz /= data.shape[0]
-            total_loss = recon_loss + l_pz - l_qz
+            kl_loss = kl_divergence_loss(mu, logvar)
+            total_loss = recon_loss + beta * kl_loss
             
             # Backward pass
             total_loss.backward()
@@ -212,6 +127,7 @@ def train_autoencoder(model, train_loader, val_loader, num_epochs):
             
             train_loss += total_loss.item()
             train_recon_loss += recon_loss.item()
+            train_kl_loss += kl_loss.item()
         
         # Validation phase
         model.eval()
@@ -222,17 +138,16 @@ def train_autoencoder(model, train_loader, val_loader, num_epochs):
         with torch.no_grad():
             for data, _ in val_loader:
                 data = data.to(device)
-                reconstructed, mu, logvar, eps = model(data)
+                reconstructed, mu, logvar = model(data)
                 
                 # Compute losses
                 recon_loss = reconstruction_criterion(reconstructed, data)
-                l_qz, l_pz = mle_loss(mu, logvar, eps)
-                l_qz /= data.shape[0]
-                l_pz /= data.shape[0]
-                total_loss = recon_loss + l_pz - l_qz
+                kl_loss = kl_divergence_loss(mu, logvar)
+                total_loss = recon_loss + beta * kl_loss
                 
                 val_loss += total_loss.item()
                 val_recon_loss += recon_loss.item()
+                val_kl_loss += kl_loss.item()
         
         # Calculate average losses
         train_loss /= len(train_loader)
@@ -278,8 +193,8 @@ def plot_reconstruction_samples(model, train_loader, val_loader):
     
     with torch.no_grad():
         # Reconstruct samples
-        train_reconstructed, _, _, _ = model(train_samples)
-        val_reconstructed, _, _, _ = model(val_samples)
+        train_reconstructed, _, _ = model(train_samples)
+        val_reconstructed, _, _ = model(val_samples)
         
         # Move to CPU for visualization
         train_original = train_samples.cpu().squeeze()
@@ -483,11 +398,10 @@ def analyze_latent_space(model, test_loader, num_samples=1000):
 def main():
     """Main function to run the CNN autoencoder training and evaluation."""
     print("Loading MNIST dataset...")
-    print(f"Binarizing images with threshold: {binarization_threshold}")
     train_loader, val_loader, test_loader = load_data()
     
     print("Initializing CNN autoencoder...")
-    model = VAE(latent_dim=latent_dim).to(device)
+    model = CNNAutoencoder(latent_dim=latent_dim).to(device)
     
     print(f"Model architecture:")
     print(model)
@@ -518,23 +432,6 @@ def main():
     # Print final losses
     print(f"\nFinal Training Loss: {train_losses[-1]:.6f}")
     print(f"Final Validation Loss: {val_losses[-1]:.6f}")
-    
-    # Compare with standard autoencoder
-    print("\n" + "="*60)
-    print("CNN Variational Autoencoder with Gaussian Regularization:")
-    print("="*60)
-    print(f"CNN VAE Parameters: {count_parameters(model):,}")
-    print(f"Latent Dimension: {latent_dim}")
-    print(f"KL Regularization Strength (β): {beta}")
-    print(f"Image Binarization Threshold: {binarization_threshold}")
-    print("This CNN VAE version:")
-    print("- Uses binarized MNIST images (0 or 1 pixel values)")
-    print("- Employs Binary Cross Entropy loss for reconstruction")
-    print("- Regularizes latent space to follow isotropic Gaussian distribution")
-    print("- Enables generation of new samples from the latent space")
-    print("- Provides smooth interpolation in latent space")
-    print("- Balances reconstruction quality with latent space regularity")
-    print("- Uses reparameterization trick for differentiable sampling")
 
 if __name__ == "__main__":
     main()
