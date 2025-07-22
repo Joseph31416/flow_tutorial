@@ -149,25 +149,25 @@ class ViMHA(nn.Module):
         x = tokens_to_image(x, self.patch_size)  # Convert back to image patches
         return x
 
-class ViTUnet(nn.Module):
+class UNetNoViT(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, num_heads: int, patch_size: int):
-        super(ViTUnet, self).__init__()
+        super(UNetNoViT, self).__init__()
         self.down1 = DownSampleBlock(in_channels, 16)
-        self.mha_down1 = ViMHA(16, 16, num_heads, patch_size)
+        # self.mha_down1 = ViMHA(16, 16, num_heads, patch_size)
         self.down2 = DownSampleBlock(16, 32)
-        self.mha_down2 = ViMHA(32, 32, num_heads, patch_size)
+        # self.mha_down2 = ViMHA(32, 32, num_heads, patch_size)
         self.up1 = UpSampleBlock(32, 16)
-        self.mha_up1 = ViMHA(16, 16, num_heads, patch_size)
+        # self.mha_up1 = ViMHA(16, 16, num_heads, patch_size)
         self.up2 = UpSampleBlock(16, out_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.down1(x)
-        x = self.mha_down1(x)
+        # x = self.mha_down1(x)
         x = self.down2(x)
-        x = self.mha_down2(x)
+        # x = self.mha_down2(x)
         x = self.up1(x)
-        x = self.mha_up1(x)
+        # x = self.mha_up1(x)
         x = self.up2(x)
         return x
 
@@ -176,6 +176,6 @@ if __name__ == "__main__":
     B, C, H, W = 4, 1, 28, 28
     patch_size = 7
     x = torch.randn(B, C, H, W)  # Random input tensor
-    model = ViTUnet(in_channels=C, out_channels=1, num_heads=4, patch_size=patch_size)
+    model = UNetNoViT(in_channels=C, out_channels=1, num_heads=4, patch_size=patch_size)
     output = model(x)
     print(f"Input shape: {x.shape}, Output shape: {output.shape}")

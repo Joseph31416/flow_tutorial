@@ -13,7 +13,8 @@ import os
 from typing import Tuple, List
 from tqdm import tqdm
 
-from unet import ViTUnet
+from vit_unet import ViTUnet
+from unet import UNetNoViT
 from blurred_dataset import BlurredMNISTDataset
 from torchvision import transforms
 
@@ -280,7 +281,7 @@ def main():
     blur_radius = 2.0
     
     # Initialize model
-    model = ViTUnet(
+    model = UNetNoViT(
         in_channels=in_channels,
         out_channels=out_channels,
         num_heads=num_heads,
