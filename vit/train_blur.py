@@ -13,7 +13,6 @@ import os
 from typing import Tuple, List
 from tqdm import tqdm
 
-from vit_unet import ViTUnet
 from unet import UNetNoViT
 from blurred_dataset import BlurredMNISTDataset
 from torchvision import transforms

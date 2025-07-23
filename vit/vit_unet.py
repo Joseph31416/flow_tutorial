@@ -2,42 +2,6 @@ import torch
 import torch.nn as nn
 from img_tokenizer import tokenize_image, tokens_to_image
 
-def down_sampling_calc(H: int, W: int, kernel_size: int, stride: int, padding: int = 0) -> tuple:
-    """
-    Calculate the output height and width after down-sampling.
-
-    Args:
-        H (int): Input height.
-        W (int): Input width.
-        kernel_size (int): Size of the convolution kernel.
-        stride (int): Stride of the convolution.
-        padding (int, optional): Padding applied to the input. Defaults to 0.
-
-    Returns:
-        tuple: Output height and width after down-sampling.
-    """
-    out_H = (H + 2 * padding - kernel_size) // stride + 1
-    out_W = (W + 2 * padding - kernel_size) // stride + 1
-    return out_H, out_W
-
-def up_sampling_calc(H: int, W: int, kernel_size: int, stride: int, padding: int = 0) -> tuple:
-    """
-    Calculate the output height and width after up-sampling.
-
-    Args:
-        H (int): Input height.
-        W (int): Input width.
-        kernel_size (int): Size of the convolution kernel.
-        stride (int): Stride of the convolution.
-        padding (int, optional): Padding applied to the input. Defaults to 0.
-
-    Returns:
-        tuple: Output height and width after up-sampling.
-    """
-    out_H = (H - 1) * stride - 2 * padding + kernel_size
-    out_W = (W - 1) * stride - 2 * padding + kernel_size
-    return out_H, out_W
-
 class DownSampleBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         super(DownSampleBlock, self).__init__()
@@ -66,50 +30,11 @@ class UpSampleBlock(nn.Module):
         x = self.relu(x)
         return x
     
-class AttentionHead(nn.Module):
-
-    def __init__(self, in_channels: int, out_channels: int, p: float = 0.1):
-        super(AttentionHead, self).__init__()
-        self.q_linear = nn.Linear(in_channels, out_channels)
-        self.k_linear = nn.Linear(in_channels, out_channels)
-        self.v_linear = nn.Linear(in_channels, out_channels)
-        self.dropout = nn.Dropout(p)
-        self.softmax = nn.Softmax(dim=-1)
-        self.d = out_channels
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Assume x is of shape (B, N, C) where B is batch size, N is number of patches, and C is channels.
-        """
-        q = self.q_linear(x)
-        k = self.k_linear(x)
-        v = self.v_linear(x)
-        k_t = k.transpose(-2, -1)  # Transpose for matrix multiplication
-        attn_score = self.softmax(torch.matmul(q, k_t) / (self.d ** 0.5))
-        attn_output = torch.matmul(attn_score, v)
-        attn_output = self.dropout(attn_output)
-        return attn_output
-    
-class MultiHeadAttention(nn.Module):
-
-    def __init__(self, in_channels: int, out_channels: int, num_heads: int):
-        super(MultiHeadAttention, self).__init__()
-        self.heads = nn.ModuleList(
-            [AttentionHead(in_channels, out_channels // num_heads) for _ in range(num_heads)]
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Assume x is of shape (B, N, C) where B is batch size, N is number of patches, and C is channels.
-        """
-        head_outputs = [head(x) for head in self.heads]
-        return torch.cat(head_outputs, dim=-1)
-    
 class MultiHeadAttentionOptimised(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, num_heads: int, p: float = 0.1):
         super(MultiHeadAttentionOptimised, self).__init__()
-        self.c_attn = nn.Linear(in_channels, 3 * out_channels)
+        self.c_attn = nn.Linear(in_channels, 3 * out_channels, bias=False)
         self.dropout = nn.Dropout(p)
         self.softmax = nn.Softmax(dim=-1)
         self.n_heads = num_heads
@@ -177,68 +102,142 @@ class ViMHA(nn.Module):
         x = tokens_to_image(x, self.patch_size)  # Convert back to image patches
         return x
 
-class ViTUnet(nn.Module):
+class DownBlockWithResAttn(nn.Module):
 
-    def __init__(self, in_channels: int, out_channels: int, num_heads: int, patch_size: int):
-        super(ViTUnet, self).__init__()
-        self.down1 = DownSampleBlock(in_channels, 16)
-        self.mha_down1 = ViMHA(16, 16, num_heads, patch_size)
-        self.down2 = DownSampleBlock(16, 32)
-        self.mha_down2 = ViMHA(32, 32, num_heads, patch_size)
-        self.up1 = UpSampleBlock(32, 16)
-        self.mha_up1 = ViMHA(16, 16, num_heads, patch_size)
-        self.up2 = UpSampleBlock(16, out_channels)
+    def __init__(self, in_channels: int, out_channels: int,
+                 num_heads: int, patch_size: int, height: int, width: int):
+        super(DownBlockWithResAttn, self).__init__()
+        self.downsample = DownSampleBlock(in_channels, out_channels)
+        dim = (height // 2) * (width // 2)
+        self.ln = nn.LayerNorm(dim)
+        self.mha = ViMHA(out_channels, out_channels, num_heads, patch_size)
+        self.linear = nn.Linear(dim, dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.down1(x)
-        x = self.mha_down1(x)
-        x = self.down2(x)
-        x = self.mha_down2(x)
-        x = self.up1(x)
-        x = self.mha_up1(x)
-        x = self.up2(x)
+        """
+        x is expected to be of shape (B, C, H, W).
+        """
+        x = self.downsample(x)
+        B, C, H, W = x.shape
+        x = x.view(x.size(0) * x.size(1), -1)
+        x = self.ln(x)
+        x = x.view(B, C, H, W)  # Reshape back to (B, out_channels, H, W)
+        x = x + self.mha(x)
+        B, C, H, W = x.shape
+        x = x.view(B, C, -1)  # Flatten to (B, C, H * W)
+        x = self.linear(x)  # Apply linear transformation
+        x = x.view(B, C, H, W)
+        return x
+    
+class UpBlockWithResAttn(nn.Module):
+    
+    def __init__(self, in_channels: int, out_channels: int,
+                 num_heads: int, patch_size: int, height: int, width: int):
+        super(UpBlockWithResAttn, self).__init__()
+        self.upsample = UpSampleBlock(in_channels, out_channels)
+        dim = (height * 2) * (width * 2)
+        self.ln = nn.LayerNorm(dim)
+        self.mha = ViMHA(out_channels, out_channels, num_heads, patch_size)
+        self.linear = nn.Linear(dim, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x is expected to be of shape (B, C, H, W).
+        """
+        x = self.upsample(x)
+        B, C, H, W = x.shape
+        x = x.view(x.size(0) * x.size(1), -1)
+        x = self.ln(x)
+        x = x.view(B, C, H, W)  # Reshape back to (B, out_channels, H, W)
+        x = x + self.mha(x)
+        B, C, H, W = x.shape
+        x = x.view(B, C, -1)  # Flatten to (B, C, H * W)
+        x = self.linear(x)  # Apply linear transformation
+        x = x.view(B, C, H, W)
         return x
 
 class ViTUnetResNorm(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, num_heads: int, patch_size: int):
         super(ViTUnetResNorm, self).__init__()
-        self.down1 = DownSampleBlock(in_channels, 16)
-        self.ln_down1 = nn.LayerNorm(14 * 14)
-        self.mha_down1 = ViMHA(16, 16, num_heads, patch_size)
-        self.down2 = DownSampleBlock(16, 32)
-        self.ln_down2 = nn.LayerNorm(7 * 7)
-        self.mha_down2 = ViMHA(32, 32, num_heads, patch_size)
-        self.up1 = UpSampleBlock(32, 16)
-        self.ln_up1 = nn.LayerNorm(14 * 14)
-        self.mha_up1 = ViMHA(16, 16, num_heads, patch_size)
-        self.up2 = UpSampleBlock(16, out_channels)
+        self.db_1 = DownBlockWithResAttn(in_channels, 16, num_heads, patch_size, 28, 28)
+        self.db_2 = DownBlockWithResAttn(16, 32, num_heads, patch_size, 14, 14)
+        self.up_1 = UpBlockWithResAttn(32, 16, num_heads, patch_size, 7, 7)
+        self.up_2 = UpBlockWithResAttn(16, out_channels, 7, patch_size, 14, 14) 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x is expected to be of shape (B, 1, 28, 28) for MNIST-like images.
         """
-        x = self.down1(x) # (B, 16, 14, 14)
-        B, C, H, W = x.shape
-        x = x.view(x.size(0) * x.size(1), -1)
-        x = self.ln_down1(x)
-        x = x.view(B, C, H, W)  # Reshape back to (B, 16, 14, 14)
-        x = x + self.mha_down1(x)
-        x = self.down2(x)
-        B, C, H, W = x.shape
-        x = x.view(x.size(0) * x.size(1), -1)
-        x = self.ln_down2(x)
-        x = x.view(B, C, H, W)
-        x = x + self.mha_down2(x)
-        x = self.up1(x)
-        B, C, H, W = x.shape
-        x = x.view(x.size(0) * x.size(1), -1)
-        x = self.ln_up1(x)
-        x = x.view(B, C, H, W)  
-        x = x + self.mha_up1(x)
-        x = self.up2(x)
+        x = self.db_1(x)
+        x = self.db_2(x)
+        x = self.up_1(x)
+        x = self.up_2(x)
         return x
+        
+class VAEViTUnetResNorm(nn.Module):
 
+    def __init__(self, in_channels: int, out_channels: int,
+                 num_heads: int, patch_size: int, latent_dim: int = 32):
+        super(VAEViTUnetResNorm, self).__init__()
+        self.latent_dim = latent_dim
+
+        self.db_1 = DownBlockWithResAttn(in_channels, 64, num_heads, patch_size, 28, 28)
+        self.db_2 = DownBlockWithResAttn(64, 128, num_heads, patch_size, 14, 14)
+        self.fc_mu = nn.Linear(128 * 7 * 7, latent_dim)
+        self.fc_logvar = nn.Linear(128 * 7 * 7, latent_dim)
+        self.fc_decode = nn.Linear(latent_dim, 128 * 7 * 7)
+        self.sigmoid = nn.Sigmoid()
+
+        self.up_1 = UpBlockWithResAttn(128, 64, num_heads, patch_size, 7, 7)
+        self.up_2 = UpBlockWithResAttn(64, out_channels, 7, patch_size, 14, 14)
+
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """
+        Reparameterization trick to sample from the latent space.
+        """
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def encode(self, x: torch.Tensor) -> tuple:
+        """
+        Encode the input tensor into mean and log variance.
+        """
+        x = self.db_1(x)
+        x = self.db_2(x)
+        x = x.view(x.size(0), -1)
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        return mu, logvar
+    
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Decode the latent vector back to the original image space.
+        """
+        x = self.fc_decode(z)
+        x = x.view(x.size(0), 128, 7, 7)
+        x = self.up_1(x)
+        x = self.up_2(x)
+        # x = self.sigmoid(x)  # Ensure output is in the range [0, 1]
+        return x
+    
+    def sample(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Sample from the VAE.
+        """
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x is expected to be of shape (B, 1, 28, 28) for MNIST-like images.
+        """
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        x_reconstructed = self.decode(z)
+        return x_reconstructed, mu, logvar
 
 if __name__ == "__main__":
     # Example usage

@@ -1,6 +1,7 @@
 """
-Training script for UNet model to reconstruct original images from masked MNIST images.
-Uses the ViTUnet model from unet.py and MaskedMNISTDataset from masked_dataset.py.
+Training script for UNet model to reconstruct original images from MNIST images.
+Uses the from vit_unet import VAEViTUnetResNorm
+ model from unet.py and MNISTDataset from normal_dataset.py.
 """
 
 import torch
@@ -13,57 +14,71 @@ import os
 from typing import Tuple, List
 from tqdm import tqdm
 
-from vit_unet import ViTUnetResNorm
-from unet import UNetNoViT
-from masked_dataset import MaskedMNISTDataset
+from vit_unet import VAEViTUnetResNorm
+from normal_dataset import MNISTDataset
 from torchvision import transforms
 
-class MaskReconstructionTrainer:
+def kl_loss(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the KL divergence loss.
+    
+    Args:
+        mu (torch.Tensor): Mean tensor.
+        logvar (torch.Tensor): Log variance tensor.
+        
+    Returns:
+        torch.Tensor: KL divergence loss.
+    """
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+def recon_loss(reconstructed: torch.Tensor, original: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the reconstruction loss (MSE).
+    
+    Args:
+        reconstructed (torch.Tensor): Reconstructed image tensor.
+        original (torch.Tensor): Original image tensor.
+        
+    Returns:
+        torch.Tensor: Reconstruction loss.
+    """
+    return nn.functional.binary_cross_entropy(reconstructed, original, reduction='mean')
+
+class VAETrainer:
     def __init__(
         self,
         model: nn.Module,
         device: torch.device,
         learning_rate: float = 1e-3,
         batch_size: int = 64,
-        num_patches: int = 8,
-        patch_size: int = 5,
-        mask_value: float = 0.0
+        beta: float = 1.0,
     ):
         self.model = model.to(device)
         self.device = device
-        self.criterion = nn.MSELoss()
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
         self.batch_size = batch_size
-        self.num_patches = num_patches
-        self.patch_size = patch_size
-        self.mask_value = mask_value
-        
+        self.beta = beta
+
         # Training history
         self.train_losses = []
         self.val_losses = []
         
     def load_data(self) -> Tuple[DataLoader, DataLoader, DataLoader]:
-        """Load and split masked MNIST dataset into train, validation, and test sets."""
+        """Load and split MNIST dataset into train, validation, and test sets."""
         transform = transforms.Compose([transforms.ToTensor()])
         
         # Create full training dataset
-        full_dataset = MaskedMNISTDataset(
+        full_dataset = MNISTDataset(
             root='../data', 
             train=True, 
-            transform=transform, 
-            num_patches=self.num_patches,
-            patch_size=self.patch_size,
-            mask_value=self.mask_value
+            transform=transform
         )
         
         # Create test dataset
-        test_dataset = MaskedMNISTDataset(
+        test_dataset = MNISTDataset(
             root='../data', 
             train=False, 
-            transform=transform, 
-            num_patches=self.num_patches,
-            patch_size=self.patch_size,
-            mask_value=self.mask_value
+            transform=transform
         )
         
         # Split training data into train and validation (80-20 split)
@@ -78,6 +93,23 @@ class MaskReconstructionTrainer:
         
         return train_loader, val_loader, test_loader
     
+    def criterion(self, reconstructed: torch.Tensor, original: torch.Tensor,
+                  mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the combined loss: reconstruction loss + beta * KL divergence.
+        Args:
+            reconstructed (torch.Tensor): Reconstructed image tensor.
+            original (torch.Tensor): Original image tensor.
+            mu (torch.Tensor): Mean tensor from the VAE.
+            logvar (torch.Tensor): Log variance tensor from the VAE.
+        Returns:
+            torch.Tensor: Total loss.
+        """ 
+        n_batch = original.size(0)
+        recon_loss_value = recon_loss(reconstructed, original)
+        kl_loss_value = kl_loss(mu, logvar) / n_batch  # Normalize by batch size
+        return recon_loss_value + self.beta * kl_loss_value
+    
     def train_epoch(self, train_loader: DataLoader) -> float:
         """Train the model for one epoch."""
         self.model.train()
@@ -85,15 +117,14 @@ class MaskReconstructionTrainer:
         num_batches = 0
         
         progress_bar = tqdm(train_loader, desc="Training")
-        for original, masked, _ in progress_bar:
+        for original, _ in progress_bar:
             original = original.to(self.device)
-            masked = masked.to(self.device)
             
             # Forward pass
             self.optimizer.zero_grad()
-            reconstructed = self.model(masked)
-            loss = self.criterion(reconstructed, original)
-            
+            x_recon, mu, logvar = self.model(original)
+            loss = self.criterion(x_recon, original, mu, logvar)
+
             # Backward pass
             loss.backward()
             self.optimizer.step()
@@ -113,19 +144,17 @@ class MaskReconstructionTrainer:
         num_batches = 0
         
         with torch.no_grad():
-            for original, masked, _ in val_loader:
+            for original, _ in val_loader:
                 original = original.to(self.device)
-                masked = masked.to(self.device)
-                
-                reconstructed = self.model(masked)
-                loss = self.criterion(reconstructed, original)
-                
+                # Forward pass
+                x_recon, mu, logvar = self.model(original)
+                loss = self.criterion(x_recon, original, mu, logvar)    
                 total_loss += loss.item()
                 num_batches += 1
         
         return total_loss / num_batches
     
-    def train(self, num_epochs: int, save_path: str = "mask_reconstruction_model.pth"):
+    def train(self, num_epochs: int, save_path: str = "vae_reconstruction_model.pth"):
         """Train the model for the specified number of epochs."""
         train_loader, val_loader, test_loader = self.load_data()
         
@@ -133,9 +162,6 @@ class MaskReconstructionTrainer:
         print(f"Validation dataset size: {len(val_loader.dataset)}")
         print(f"Test dataset size: {len(test_loader.dataset)}")
         print(f"Device: {self.device}")
-        print(f"Number of patches: {self.num_patches}")
-        print(f"Patch size: {self.patch_size}x{self.patch_size}")
-        print(f"Mask value: {self.mask_value}")
         print("-" * 50)
         
         best_val_loss = float('inf')
@@ -162,9 +188,7 @@ class MaskReconstructionTrainer:
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'train_loss': train_loss,
                     'val_loss': val_loss,
-                    'num_patches': self.num_patches,
-                    'patch_size': self.patch_size,
-                    'mask_value': self.mask_value
+                    'beta': self.beta
                 }, save_path)
                 print(f"New best model saved with validation loss: {val_loss:.4f}")
         
@@ -174,14 +198,14 @@ class MaskReconstructionTrainer:
         
         return test_loader
     
-    def plot_training_history(self, save_path: str = "mask_training_history.png"):
+    def plot_training_history(self, save_path: str = "training_history.png"):
         """Plot training and validation loss history."""
         plt.figure(figsize=(10, 6))
         plt.plot(self.train_losses, label='Training Loss', color='blue')
         plt.plot(self.val_losses, label='Validation Loss', color='red')
         plt.xlabel('Epoch')
         plt.ylabel('Loss (MSE)')
-        plt.title('Mask Reconstruction: Training and Validation Loss History')
+        plt.title('Training and Validation Loss History')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -189,27 +213,29 @@ class MaskReconstructionTrainer:
         plt.show()
         print(f"Training history plot saved to {save_path}")
     
-    def visualize_results(self, test_loader: DataLoader, num_samples: int = 8, save_path: str = "mask_reconstruction_samples.png"):
-        """Visualize reconstruction results on test samples."""
+    def visualize_results(self, test_loader: DataLoader, num_samples: int = 8, save_path: str = "vae_reconstruction_samples.png"):
+        """Visualize VAE reconstruction and sampling results on test samples."""
         self.model.eval()
         
         # Get a batch of test samples
-        original_batch, masked_batch, labels_batch = next(iter(test_loader))
+        original_batch, labels_batch = next(iter(test_loader))
         original_batch = original_batch.to(self.device)
-        masked_batch = masked_batch.to(self.device)
         
         with torch.no_grad():
-            reconstructed_batch = self.model(masked_batch)
+            # Get reconstructions from VAE forward pass
+            reconstructed_batch, mu, logvar = self.model(original_batch)
+            # Get samples using the sample method
+            sampled_batch = self.model.sample(original_batch)
         
         # Move to CPU for plotting
         original_batch = original_batch.cpu()
-        masked_batch = masked_batch.cpu()
         reconstructed_batch = reconstructed_batch.cpu()
+        sampled_batch = sampled_batch.cpu()
         
         # Select random samples
         indices = np.random.choice(len(original_batch), min(num_samples, len(original_batch)), replace=False)
         
-        # Create subplot grid
+        # Create subplot grid: Original, Reconstructed, Sampled
         fig, axes = plt.subplots(3, num_samples, figsize=(2*num_samples, 6))
         if num_samples == 1:
             axes = axes.reshape(3, 1)
@@ -220,62 +246,98 @@ class MaskReconstructionTrainer:
             axes[0, i].set_title(f'Original\nLabel: {labels_batch[idx].item()}')
             axes[0, i].axis('off')
             
-            # Masked image
-            axes[1, i].imshow(masked_batch[idx].squeeze(), cmap='gray')
-            axes[1, i].set_title(f'Masked\n({self.num_patches} patches)')
-            axes[1, i].axis('off')
-            
             # Reconstructed image
-            axes[2, i].imshow(reconstructed_batch[idx].squeeze(), cmap='gray')
+            axes[1, i].imshow(reconstructed_batch[idx].squeeze(), cmap='gray')
             
             # Calculate reconstruction error
             mse = torch.mean((original_batch[idx] - reconstructed_batch[idx]) ** 2).item()
-            axes[2, i].set_title(f'Reconstructed\nMSE: {mse:.4f}')
+            axes[1, i].set_title(f'Reconstructed\nMSE: {mse:.4f}')
+            axes[1, i].axis('off')
+            
+            # Sampled image
+            axes[2, i].imshow(sampled_batch[idx].squeeze(), cmap='gray')
+            
+            # Calculate sampling error
+            sample_mse = torch.mean((original_batch[idx] - sampled_batch[idx]) ** 2).item()
+            axes[2, i].set_title(f'Sampled\nMSE: {sample_mse:.4f}')
             axes[2, i].axis('off')
         
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
-        print(f"Reconstruction samples saved to {save_path}")
+        print(f"VAE reconstruction and sampling results saved to {save_path}")
     
-    def visualize_mask_locations(self, test_loader: DataLoader, num_samples: int = 5, save_path: str = "mask_locations.png"):
-        """Visualize different random mask patterns on the same image."""
-        # Get one sample image
-        original_batch, _, labels_batch = next(iter(test_loader))
-        sample_image = original_batch[0]  # Use first image
-        sample_label = labels_batch[0].item()
+    def visualize_latent_interpolation(self, test_loader: DataLoader, num_steps: int = 8, save_path: str = "latent_interpolation.png"):
+        """Visualize interpolation between two images in latent space."""
+        self.model.eval()
         
-        # Generate multiple masked versions
-        fig, axes = plt.subplots(1, num_samples + 1, figsize=(2*(num_samples + 1), 2))
+        # Get two different images
+        original_batch, labels_batch = next(iter(test_loader))
+        img1 = original_batch[0:1].to(self.device)  # First image
+        img2 = original_batch[1:2].to(self.device)  # Second image
         
-        # Show original
-        axes[0].imshow(sample_image.squeeze(), cmap='gray')
-        axes[0].set_title(f'Original\nLabel: {sample_label}')
-        axes[0].axis('off')
-        
-        # Show different masked versions
-        for i in range(num_samples):
-            # Create a new masked version by applying random masks
-            masked_image = sample_image.clone()
-            C, H, W = masked_image.shape
+        with torch.no_grad():
+            # Encode both images to get latent representations
+            mu1, logvar1 = self.model.encode(img1)
+            mu2, logvar2 = self.model.encode(img2)
             
-            # Generate random masks
-            for _ in range(self.num_patches):
-                max_top = max(0, H - self.patch_size)
-                max_left = max(0, W - self.patch_size)
-                top = np.random.randint(0, max_top + 1)
-                left = np.random.randint(0, max_left + 1)
-                masked_image[:, top:top+self.patch_size, left:left+self.patch_size] = self.mask_value
+            # Sample from latent distributions
+            z1 = self.model.reparameterize(mu1, logvar1)
+            z2 = self.model.reparameterize(mu2, logvar2)
             
-            axes[i + 1].imshow(masked_image.squeeze(), cmap='gray')
-            axes[i + 1].set_title(f'Mask Pattern {i+1}')
-            axes[i + 1].axis('off')
+            # Create interpolation steps
+            interpolated_images = []
+            for i in range(num_steps):
+                alpha = i / (num_steps - 1)
+                z_interp = (1 - alpha) * z1 + alpha * z2
+                img_interp = self.model.decode(z_interp)
+                interpolated_images.append(img_interp.cpu())
         
-        plt.suptitle(f'Random Mask Patterns: {self.num_patches} patches of {self.patch_size}x{self.patch_size}')
+        # Plot interpolation
+        fig, axes = plt.subplots(1, num_steps, figsize=(2*num_steps, 2))
+        if num_steps == 1:
+            axes = [axes]
+        
+        for i, img in enumerate(interpolated_images):
+            axes[i].imshow(img.squeeze(), cmap='gray')
+            alpha = i / (num_steps - 1)
+            axes[i].set_title(f'α={alpha:.2f}')
+            axes[i].axis('off')
+        
+        plt.suptitle(f'Latent Space Interpolation\nFrom Label {labels_batch[0].item()} to Label {labels_batch[1].item()}')
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
-        print(f"Mask location visualization saved to {save_path}")
+        print(f"Latent interpolation visualization saved to {save_path}")
+    
+    def visualize_random_samples(self, num_samples: int = 8, save_path: str = "random_samples.png"):
+        """Generate and visualize random samples from the VAE latent space."""
+        self.model.eval()
+        
+        with torch.no_grad():
+            # Sample random latent vectors
+            z = torch.randn(num_samples, self.model.latent_dim).to(self.device)
+            # Decode to generate images
+            generated_images = self.model.decode(z)
+        
+        # Move to CPU for plotting
+        generated_images = generated_images.cpu()
+        
+        # Plot generated samples
+        fig, axes = plt.subplots(1, num_samples, figsize=(2*num_samples, 2))
+        if num_samples == 1:
+            axes = [axes]
+        
+        for i in range(num_samples):
+            axes[i].imshow(generated_images[i].squeeze(), cmap='gray')
+            axes[i].set_title(f'Sample {i+1}')
+            axes[i].axis('off')
+        
+        plt.suptitle('Random Samples from VAE Latent Space')
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+        print(f"Random samples visualization saved to {save_path}")
     
     def calculate_metrics(self, test_loader: DataLoader) -> dict:
         """Calculate various metrics on the test set."""
@@ -286,20 +348,16 @@ class MaskReconstructionTrainer:
         total_samples = 0
         
         with torch.no_grad():
-            for original, masked, _ in test_loader:
+            for original, _ in test_loader:
                 original = original.to(self.device)
-                masked = masked.to(self.device)
-                
-                reconstructed = self.model(masked)
-                
-                # Calculate metrics
-                mse = torch.mean((original - reconstructed) ** 2)
-                mae = torch.mean(torch.abs(original - reconstructed))
-                
-                batch_size = original.size(0)
-                total_mse += mse.item() * batch_size
-                total_mae += mae.item() * batch_size
-                total_samples += batch_size
+                # Forward pass
+                x_recon, mu, logvar = self.model(original)
+                # Calculate MSE and MAE
+                mse = torch.mean((x_recon - original) ** 2).item()
+                mae = torch.mean(torch.abs(x_recon - original)).item()
+                total_mse += mse * original.size(0)
+                total_mae += mae * original.size(0)
+                total_samples += original.size(0)
         
         avg_mse = total_mse / total_samples
         avg_mae = total_mae / total_samples
@@ -315,7 +373,7 @@ class MaskReconstructionTrainer:
 
 def main():
     # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     device = "mps"
     print(f"Using device: {device}")
     
@@ -330,13 +388,8 @@ def main():
     batch_size = 64
     num_epochs = 10
     
-    # Masking parameters
-    num_patches = 8  # Number of patches to mask (K)
-    mask_patch_size = 5  # Size of each masked patch (N x N)
-    mask_value = 0.0  # Black masks
-    
     # Initialize model
-    model = ViTUnetResNorm(
+    model = VAEViTUnetResNorm(
         in_channels=in_channels,
         out_channels=out_channels,
         num_heads=num_heads,
@@ -346,28 +399,29 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Initialize trainer
-    trainer = MaskReconstructionTrainer(
+    trainer = VAETrainer(
         model=model,
         device=device,
         learning_rate=learning_rate,
         batch_size=batch_size,
-        num_patches=num_patches,
-        patch_size=mask_patch_size,
-        mask_value=mask_value
+        beta=0  # KL divergence weight
     )
     
     # Train the model
     print("Starting training...")
-    test_loader = trainer.train(num_epochs=num_epochs, save_path="mask_reconstruction_model.pth")
+    test_loader = trainer.train(num_epochs=num_epochs, save_path="vae_reconstruction_model.pth")
     
     # Plot training history
-    trainer.plot_training_history("mask_training_history.png")
+    trainer.plot_training_history("training_history.png")
     
     # Visualize results
-    trainer.visualize_results(test_loader, num_samples=8, save_path="mask_reconstruction_samples.png")
+    trainer.visualize_results(test_loader, num_samples=8, save_path="vae_reconstruction_samples.png")
     
-    # Visualize mask patterns
-    trainer.visualize_mask_locations(test_loader, num_samples=5, save_path="mask_locations.png")
+    # Visualize latent interpolation
+    trainer.visualize_latent_interpolation(test_loader, num_steps=8, save_path="latent_interpolation.png")
+    
+    # Visualize random samples from latent space
+    trainer.visualize_random_samples(num_samples=8, save_path="random_samples.png")
     
     # Calculate and print metrics
     metrics = trainer.calculate_metrics(test_loader)
