@@ -14,7 +14,7 @@ import os
 from typing import Tuple, List
 from tqdm import tqdm
 
-from vit_unet import VAEViTUnetResNorm
+from vae_vit_unet import VAEViTUnetResNorm
 from normal_dataset import MNISTDataset
 from torchvision import transforms
 
@@ -42,7 +42,8 @@ def recon_loss(reconstructed: torch.Tensor, original: torch.Tensor) -> torch.Ten
     Returns:
         torch.Tensor: Reconstruction loss.
     """
-    return nn.functional.binary_cross_entropy(reconstructed, original, reduction='mean')
+    # return nn.functional.binary_cross_entropy(reconstructed, original, reduction='mean')
+    return nn.functional.mse_loss(reconstructed, original, reduction='mean')
 
 class VAETrainer:
     def __init__(
@@ -108,12 +109,14 @@ class VAETrainer:
         n_batch = original.size(0)
         recon_loss_value = recon_loss(reconstructed, original)
         kl_loss_value = kl_loss(mu, logvar) / n_batch  # Normalize by batch size
-        return recon_loss_value + self.beta * kl_loss_value
+        return recon_loss_value + self.beta * kl_loss_value, recon_loss_value, kl_loss_value
     
     def train_epoch(self, train_loader: DataLoader) -> float:
         """Train the model for one epoch."""
         self.model.train()
         total_loss = 0.0
+        total_recon_loss = 0.0
+        total_kl_loss = 0.0
         num_batches = 0
         
         progress_bar = tqdm(train_loader, desc="Training")
@@ -123,18 +126,23 @@ class VAETrainer:
             # Forward pass
             self.optimizer.zero_grad()
             x_recon, mu, logvar = self.model(original)
-            loss = self.criterion(x_recon, original, mu, logvar)
+            # print min and max of reconstructed tensor
+            # print(f"Reconstructed min: {x_recon.min().item()}, max: {x_recon.max().item()}")
+            # Compute loss
+            loss, recon_loss_value, kl_loss_value = self.criterion(x_recon, original, mu, logvar)
 
             # Backward pass
             loss.backward()
             self.optimizer.step()
             
             total_loss += loss.item()
+            total_recon_loss += recon_loss_value.item()
+            total_kl_loss += kl_loss_value.item()
             num_batches += 1
             
             # Update progress bar
             progress_bar.set_postfix({'Loss': f'{loss.item():.4f}'})
-        
+        print(f"Recon Loss: {total_recon_loss / num_batches:.4f}, KL Loss: {total_kl_loss / num_batches:.4f}")
         return total_loss / num_batches
     
     def validate(self, val_loader: DataLoader) -> float:
@@ -148,7 +156,7 @@ class VAETrainer:
                 original = original.to(self.device)
                 # Forward pass
                 x_recon, mu, logvar = self.model(original)
-                loss = self.criterion(x_recon, original, mu, logvar)    
+                loss, recon_loss_value, kl_loss_value = self.criterion(x_recon, original, mu, logvar)    
                 total_loss += loss.item()
                 num_batches += 1
         
@@ -384,16 +392,18 @@ def main():
     patch_size = 7  # 28x28 images, so 7x7 patches give us 4x4 grid
     
     # Training parameters
-    learning_rate = 1e-3
+    learning_rate = 1e-4
     batch_size = 64
-    num_epochs = 10
+    num_epochs = 20
     
     # Initialize model
     model = VAEViTUnetResNorm(
-        in_channels=in_channels,
-        out_channels=out_channels,
-        num_heads=num_heads,
-        patch_size=patch_size
+        channels=[1, 16, 32, 64, 128],
+        num_heads=[4, 4, 8, 8],
+        patch_sizes=[8, 8, 4, 2],
+        latent_dim=64,
+        init_h=32,  # Initial height of resized MNIST images
+        init_w=32  # Initial width of resized MNIST images
     )
     
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -404,7 +414,7 @@ def main():
         device=device,
         learning_rate=learning_rate,
         batch_size=batch_size,
-        beta=0  # KL divergence weight
+        beta=1e-5  # KL divergence weight
     )
     
     # Train the model

@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from vit_unet import ViTUnetResNorm
 from masked_dataset import MaskedMNISTDataset
+from masked_dataset_aug import MaskedAugMNISTDataset
 from torchvision import transforms
 
 class MaskReconstructionTrainer:
@@ -45,7 +46,7 @@ class MaskReconstructionTrainer:
         transform = transforms.Compose([transforms.ToTensor()])
         
         # Create full training dataset
-        full_dataset = MaskedMNISTDataset(
+        full_dataset = MaskedAugMNISTDataset(
             root='../data', 
             train=True, 
             transform=transform, 
@@ -55,7 +56,7 @@ class MaskReconstructionTrainer:
         )
         
         # Create test dataset
-        test_dataset = MaskedMNISTDataset(
+        test_dataset = MaskedAugMNISTDataset(
             root='../data', 
             train=False, 
             transform=transform, 
@@ -325,7 +326,7 @@ def main():
     
     # Training parameters
     learning_rate = 1e-3
-    batch_size = 64
+    batch_size = 256
     num_epochs = 10
     
     # Masking parameters

@@ -120,7 +120,7 @@ class DownBlockWithResAttn(nn.Module):
         x = self.downsample(x)
         B, C, H, W = x.shape
         x = x.view(x.size(0) * x.size(1), -1)
-        x = self.ln(x)
+        # x = self.ln(x)
         x = x.view(B, C, H, W)  # Reshape back to (B, out_channels, H, W)
         x = x + self.mha(x)
         B, C, H, W = x.shape
@@ -147,7 +147,7 @@ class UpBlockWithResAttn(nn.Module):
         x = self.upsample(x)
         B, C, H, W = x.shape
         x = x.view(x.size(0) * x.size(1), -1)
-        x = self.ln(x)
+        # x = self.ln(x)
         x = x.view(B, C, H, W)  # Reshape back to (B, out_channels, H, W)
         x = x + self.mha(x)
         B, C, H, W = x.shape

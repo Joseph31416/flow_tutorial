@@ -33,6 +33,7 @@ class ViTUnetResNorm(nn.Module):
         self.up_blocks.append(
             UpBlockWithResAttn(in_channels, channels[0], num_heads[0], patch_sizes[0], init_h, init_w)
         )
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -40,6 +41,7 @@ class ViTUnetResNorm(nn.Module):
         """
         for down_block in self.down_blocks:
             x = down_block(x)
-        for i, up_block in enumerate(self.up_blocks):
+        for up_block in self.up_blocks:
             x = up_block(x)
+        x = self.relu(x)
         return x

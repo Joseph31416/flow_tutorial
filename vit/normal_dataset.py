@@ -20,6 +20,8 @@ class MNISTDataset(Dataset):
             blur_radius (float): Radius for Gaussian blur.
         """
         self.mnist_dataset = MNIST(root=root, train=train, download=True)
+        # Create a resize transform to ensure all images are 32x32
+        self.resize_transform = transforms.Resize((32, 32))
         self.transform = transform
 
     def __len__(self) -> int:
@@ -27,6 +29,7 @@ class MNISTDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         image, label = self.mnist_dataset[idx]
+        image = self.resize_transform(image)
         if self.transform:
             image = self.transform(image)
 
