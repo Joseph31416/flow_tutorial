@@ -9,12 +9,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
 import numpy as np
-import os
-from typing import Tuple, List
+from typing import Tuple
 from tqdm import tqdm
 
 from vit_unet import ViTUnetResNorm
-from unet import UNetNoViT
 from masked_dataset import MaskedMNISTDataset
 from torchvision import transforms
 
@@ -332,17 +330,19 @@ def main():
     
     # Masking parameters
     num_patches = 8  # Number of patches to mask (K)
-    mask_patch_size = 5  # Size of each masked patch (N x N)
+    mask_patch_size = 8  # Size of each masked patch (N x N)
     mask_value = 0.0  # Black masks
     
     # Initialize model
     model = ViTUnetResNorm(
-        in_channels=in_channels,
-        out_channels=out_channels,
-        num_heads=num_heads,
-        patch_size=patch_size
+        channels=[1, 16, 32],
+        num_heads=[4, 4],
+        patch_sizes=[8, 8],
+        init_h=32,  # Initial height of resized MNIST images
+        init_w=32  # Initial width of resized MNIST images
     )
     
+    print(f"Model architecture:\n{model}")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Initialize trainer

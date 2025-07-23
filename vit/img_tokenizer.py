@@ -60,7 +60,7 @@ if __name__ == "__main__":
     mnist_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     image, _ = mnist_dataset[random.randint(0, len(mnist_dataset) - 1)]
     image = image.unsqueeze(0)  # Add batch dimension (B=1, C=1, H=28, W=28)
-    patch_size = 7  # Example patch size
+    patch_size = 2  # Example patch size
     tokenized_image = tokenize_image(image, patch_size)
     print(f"Original image shape: {image.shape}")
     print(f"Tokenized image shape: {tokenized_image.shape}")

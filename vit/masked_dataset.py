@@ -23,6 +23,8 @@ class MaskedMNISTDataset(Dataset):
             mask_value (float): Value to use for masked pixels (0.0 for black, 1.0 for white).
         """
         self.mnist_dataset = MNIST(root=root, train=train, download=True)
+        # Create a resize transform to ensure all images are 32x32
+        self.resize_transform = transforms.Resize((32, 32))
         self.transform = transform
         self.num_patches = num_patches
         self.patch_size = patch_size
@@ -64,6 +66,10 @@ class MaskedMNISTDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
         image, label = self.mnist_dataset[idx]
+        
+        # First resize the image to 32x32
+        image = self.resize_transform(image)
+        
         if self.transform:
             image = self.transform(image)
         
@@ -77,7 +83,7 @@ if __name__ == "__main__":
     transform = transforms.Compose([transforms.ToTensor()])
     masked_mnist_dataset = MaskedMNISTDataset(
         root='./data', train=True, transform=transform, 
-        num_patches=8, patch_size=5, mask_value=0.0
+        num_patches=8, patch_size=8, mask_value=0.0
     )
     
     # Get a sample
